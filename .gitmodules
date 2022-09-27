@@ -1,0 +1,2 @@
+[submodule "nova"]
+	url = git@gitlab.com:igdevltd/developers/libs/laravel/nova.git

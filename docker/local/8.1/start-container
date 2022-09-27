@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+if [ ! -z "$WWWUSER" ]; then
+    usermod -u $WWWUSER sail
+fi
+
+if [ ! -d /.composer ]; then
+    mkdir /.composer
+fi
+
+chmod -R ugo+rw /.composer
+
+composer config --global --auth gitlab-token.gitlab.com $GITLAB_PERSONAL_ACCESS_TOKEN && echo ">> Gitlab PAT written <<"
+
+if [ $# -gt 0 ]; then
+    exec gosu $WWWUSER "$@"
+else
+    /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+fi

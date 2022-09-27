@@ -1,0 +1,73 @@
+version: '3'
+services:
+    laravel.test:
+        build:
+            context: docker/local/8.1
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: sail-8.1/app
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        ports:
+            - '${APP_PORT:-80}:80'
+            - '9123:9123'
+        environment:
+            WWWUSER: '${WWWUSER}'
+            LARAVEL_SAIL: 1
+            XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
+            XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
+            PHP_IDE_CONFIG: '${SAIL_PHP_IDE_CONFIG:-serverName=casino.backend.local}'
+            GITLAB_PERSONAL_ACCESS_TOKEN: '${GITLAB_PAT}'
+        expose:
+            - 9123
+        volumes:
+            - '.:/var/www/html'
+            - './docker/local/8.1/nginx.conf:/etc/nginx/sites-enabled/default'
+        networks:
+            - sail
+        depends_on:
+            - mariadb
+            - redis
+    mariadb:
+        image: 'mariadb:10.6.5'
+        ports:
+            - '${FORWARD_DB_PORT:-3306}:3306'
+        environment:
+            MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
+            MYSQL_ROOT_HOST: "%"
+            MYSQL_DATABASE: '${DB_DATABASE}'
+            MARIADB_DATABASE_TEST: '${DB_DATABASE_TEST}'
+            MYSQL_USER: '${DB_USERNAME}'
+            MARIADB_USER_TEST: '${DB_USERNAME_TEST}'
+            MYSQL_PASSWORD: '${DB_PASSWORD}'
+            MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        volumes:
+            - 'sail-mariadb:/var/lib/mysql'
+            - './docker/local/mariadb/init:/docker-entrypoint-initdb.d'
+        networks:
+            - sail
+        healthcheck:
+            test: ["CMD", "mysqladmin", "ping", "-p${DB_PASSWORD}"]
+            retries: 3
+            timeout: 5s
+    redis:
+        image: 'redis:6.2.6-alpine'
+        ports:
+            - '${FORWARD_REDIS_PORT:-6379}:6379'
+        volumes:
+            - 'sail-redis:/data'
+        networks:
+            - sail
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            retries: 3
+            timeout: 5s
+networks:
+    sail:
+        driver: bridge
+volumes:
+    sail-mariadb:
+        driver: local
+    sail-redis:
+        driver: local

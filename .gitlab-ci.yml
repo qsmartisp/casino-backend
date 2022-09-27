@@ -1,0 +1,195 @@
+stages:
+  - preparation
+  - building
+  - testing
+  - making_image
+  - deploy_to_my_env
+
+
+image: igamedev/sail:8.1
+
+# Variables
+variables:
+  MYSQL_ROOT_PASSWORD: root
+  MYSQL_USER: sail_test
+  MYSQL_PASSWORD: password
+  MYSQL_DATABASE: casino_backend_test
+  DB_HOST: mariadb
+  WWWUSER: 1000
+  DOCKER_IMAGE_NAME_RC: igamedev/casino-backend-rc
+  DOCKER_IMAGE_NAME_DEV: igamedev/casino-backend-dev
+  DOCKER_IMAGE_NAME_MAIN: igamedev/casino-backend
+
+cache:
+  key: "$CI_JOB_NAME-$CI_COMMIT_REF_SLUG"
+
+.composer:
+  stage: preparation
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == 'develop' || $CI_COMMIT_BRANCH == 'main' || $CI_COMMIT_BRANCH == 'rc'
+      when: always
+    - when: manual
+  
+  before_script:
+    - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+#    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@git@gitlab.com/".insteadOf "git@gitlab.com:"
+#    - git submodule sync && git submodule update --init
+  script:
+    - php -v
+    - composer install --optimize-autoloader --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts --ignore-platform-reqs
+    - cp .env.testing .env
+    - php artisan key:generate
+  artifacts:
+    paths:
+      - vendor/
+      - .env
+    expire_in: 1 days
+    when: always
+  variables:
+    COMPOSER_HOME: .composer
+#    GIT_SUBMODULE_STRATEGY: recursive
+  cache:
+    paths:
+      - vendor/
+      - .composer/
+
+composer:
+  extends: .composer
+  stage: preparation
+
+db-seeding:
+  stage: preparation
+  services:
+    - name: mariadb:10.6
+      command: ["--default-authentication-plugin=mysql_native_password"]
+  # Download the artifacts for these jobs
+  dependencies:
+    - composer
+  needs:
+    - composer
+  script:
+    - php artisan migrate:fresh --seed
+    - mysqldump --column-statistics=0 --host="${DB_HOST}" --user="${MYSQL_USER}" --password="${MYSQL_PASSWORD}" "${MYSQL_DATABASE}" > db.sql
+  artifacts:
+    paths:
+      - storage/logs # for debugging
+      - db.sql
+    expire_in: 1 days
+    when: always
+
+phpunit:
+  stage: testing
+  services:
+    - name: mariadb:10.6
+      command: ["--default-authentication-plugin=mysql_native_password"]
+  # Download the artifacts for these jobs
+  dependencies:
+    - composer
+    - db-seeding
+  needs:
+    - composer
+    - db-seeding
+  script:
+    - php -v
+    #- cp /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini /usr/local/etc/php/conf.d/docker-php-ext-xdebug.bak
+    #- echo "" | tee /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+    - mysql --host="${DB_HOST}" --user="${MYSQL_USER}" --password="${MYSQL_PASSWORD}" "${MYSQL_DATABASE}" < db.sql
+    - ./vendor/phpunit/phpunit/phpunit --version
+    - php -d short_open_tag=off ./vendor/phpunit/phpunit/phpunit -v --colors=never --stderr
+    #- cp /usr/local/etc/php/conf.d/docker-php-ext-xdebug.bak /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+  artifacts:
+    paths:
+      - ./storage/logs # for debugging
+    expire_in: 1 days
+    when: on_failure
+
+composer_dev:
+  extends: .composer
+  stage: making_image
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == 'develop'
+    - if: $CI_COMMIT_BRANCH == 'main'
+    - if: $CI_COMMIT_BRANCH == 'rc'
+    - when: never
+
+make_image:
+  image: docker:20.10.12
+  stage: making_image
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == 'develop'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_DEV}
+
+    - if: $CI_COMMIT_BRANCH == 'main'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_MAIN}
+  
+    - if: $CI_COMMIT_BRANCH == 'rc'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_RC}
+
+  script:
+    - docker build -t "${DOCKER_IMAGE_NAME:latest}" -f docker/stage/Dockerfile .
+    - docker push "${DOCKER_IMAGE_NAME:latest}"
+  dependencies:
+    - composer_dev
+  needs:
+    - composer_dev
+
+
+composer_to_my_env:
+  extends: .composer
+  stage: deploy_to_my_env
+  when: manual
+  needs: []
+  rules:
+    - if: $GITLAB_USER_LOGIN == 'GanbI4'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_MAIN}-az
+      when: manual
+
+    - if: $GITLAB_USER_LOGIN == 'EugeneKotchetov'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_MAIN}-eu
+      when: manual
+
+    - if: $GITLAB_USER_LOGIN == 'red_is_my_fav'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_MAIN}-aaa
+
+  
+
+deploy_to_my_env:
+  image: docker:20.10.12
+  stage: deploy_to_my_env
+  rules:
+    - if: $GITLAB_USER_LOGIN == 'GanbI4'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_MAIN}-az
+
+    - if: $GITLAB_USER_LOGIN == 'EugeneKotchetov'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_MAIN}-eu
+
+    - if: $GITLAB_USER_LOGIN == 'red_is_my_fav'
+      variables:
+        DOCKER_IMAGE_NAME: ${DOCKER_IMAGE_NAME_MAIN}-aaa
+
+  script:
+    - echo docker build -t "$DOCKER_IMAGE_NAME:latest" -f docker/stage/Dockerfile .
+    - docker build -t "$DOCKER_IMAGE_NAME:latest" -f docker/stage/Dockerfile .
+    - docker push "$DOCKER_IMAGE_NAME:latest"
+  dependencies:
+    - composer_to_my_env
+  needs:
+    - composer_to_my_env
+
+
+
