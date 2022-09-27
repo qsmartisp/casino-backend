@@ -41,7 +41,7 @@ services:
             MYSQL_USER: '${DB_USERNAME}'
             MARIADB_USER_TEST: '${DB_USERNAME_TEST}'
             MYSQL_PASSWORD: '${DB_PASSWORD}'
-            MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+            MYSQL_ALLOW_EMPTY_PASSWORD: 'no'
         volumes:
             - 'sail-mariadb:/var/lib/mysql'
             - './docker/local/mariadb/init:/docker-entrypoint-initdb.d'
